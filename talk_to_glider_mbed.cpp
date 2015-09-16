@@ -28,8 +28,7 @@
 //June 30, 2015 define the minimum depth sonar sectors from the glider
 //July 13, 2015  update ambiguity flag and controls
 //September 1, 2015 change the bug of ambiguity flag
-//September 11, 2015 GitHub test
-//////sepeotoefgjf
+September 16, 2015 added P-gain variable. Allow user to define in the glider mission file.
 */
 #include<iostream>
 #include<stddef.h>
@@ -263,11 +262,10 @@ for(i=min_bin+half_span;i<binbytes-half_span;i++)
 return range_find;
 }
 //////////////////////////PID Heading controller//////////////////
-void HeadingPID(float range_vy,float offset,float d_time, float &d_heading, float &error_east0, float &error_east, float &i_range, float &i_range0)
+void HeadingPID(float range_vy,float offset,float d_time, float &d_heading, float &error_east0, float &error_east, float &i_range, float &i_range0,float Kp)
 {
-float Kp=3;
-float Kd=0.5;
-float Ki=0.01;
+float Kd=0;
+float Ki=0;
 float d_range;
 error_east=range_vy-offset;
 i_range=i_range0+error_east;
@@ -299,7 +297,7 @@ int glider_enable=1;
 int count;
 int beta=-35; //forward looking angle
 ///////////////////values to and from glider com/////////////
-char tritech_setting[12];
+char tritech_setting[13];
 int range=70;
 int leftlim=225;   //-45
 int rightlim=315;  //+45
@@ -375,14 +373,20 @@ int16_t active_R;
 float sum_vx=0,sum_vy=0,sum_vz=0;
 int down_flag=0,up_flag=0,center_flag=0;
 float range_vy0=70;
+float P_gain;
 /////////log file and time stuff/////////////////
 FILE *logfd;
 ///////////////////////////////////////////////////////////
 ////////////////////end of defining variables//////////////
 ///////////////////////////////////////////////////////////
 
+
+
 ///////////////////testing area/////////////////////////////
 
+//////////////////////////////////////////////////////////
+/////////////Start the initialization////////////////////
+////////////////////////////////////////////////////////
 //start the serials///
 serial_init_glider();
 serial_init_mbed();
@@ -392,36 +396,10 @@ serial_init_mbed();
 logfd=fopen("tritech_log.txt","a");
 fprintf(logfd,"good now\r\n");
 fclose(logfd);
-//logfd=fopen("/media/UNTITLED/tritech_log.txt","a");
 logfd=fopen("tritech_log.txt","a");
 
-///Get heading controller setup////
-///get minimum depth
-/*
-	while(!(read(fd_mbed,&active_depth,1)>0))
-	{
-	pauseNanoSec(2000000);
-	}
-///get sector
-	for (count=0;count<2;count++)
-	{
-	while(!(read(fd_mbed,&active_sectorL[count],1)>0))
-		{
-		pauseNanoSec(2000000);
-		}
-	}
-	for (count=0;count<2;count++)
-	{
-	while(!(read(fd_mbed,&active_sectorR[count],1)>0))
-		{
-		pauseNanoSec(2000000);
-		}
-	}
-	active_L=active_sectorL[0]*256+active_sectorL[1];
-	active_R=active_sectorL[0]*256+active_sectorL[1];
-*/
 ////get sonar setup/////
-///receive the next 6 bytes which are the sonar setting
+///receive the next 13 bytes which are the sonar setting
 if(glider_enable==1)
 {
 //printf("waiting for glider setup\r\n");
@@ -432,7 +410,7 @@ if(glider_enable==1)
 	pauseNanoSec(2000000);
 	}
 	}
-	for(count=0;count<12;count++)
+	for(count=0;count<13;count++)
 	{
 		while(!(read(fd_glider,&tritech_setting[count],1)>0))
 		{
@@ -441,14 +419,15 @@ if(glider_enable==1)
 	//	printf("%d;",tritech_setting[count]);
 	}
 
-	range=tritech_setting[0];
-	leftlim=tritech_setting[1]+tritech_setting[2]*256;
-	rightlim=tritech_setting[3]+tritech_setting[4]*256;
-	c_heading_glider=tritech_setting[5]+tritech_setting[6]*256;
-	c_heading=c_heading_glider;
-	active_depth=tritech_setting[7];
-	active_L=tritech_setting[8]+tritech_setting[9]*256;
-	active_R=tritech_setting[10]+tritech_setting[11]*256;
+	range=tritech_setting[0];    ///sonar profile range
+	leftlim=tritech_setting[1]+tritech_setting[2]*256; ///sonar left sector limit
+	rightlim=tritech_setting[3]+tritech_setting[4]*256;/// sonar right sector limit
+	c_heading_glider=tritech_setting[5]+tritech_setting[6]*256;///Initial mission heading
+	c_heading=c_heading_glider;		
+	active_depth=tritech_setting[7];	//active depth of the heading controller 
+	active_L=tritech_setting[8]+tritech_setting[9]*256;	//active left sector limit
+	active_R=tritech_setting[10]+tritech_setting[11]*256;	//active right sector limit
+	P_gain=tritech_setting[12]/10.0;			//P gain of the heading calculator
 	//printf("range=%d;leftlim=%d;rightlim=%d;c_heading=%f\r\n",range,leftlim,rightlim,c_heading);
 
 	////send a string to let glider jump into proglet run() function.
@@ -459,21 +438,20 @@ if(glider_enable==1)
 	write(fd_mbed,&tritech_setting[0],5);
 }//end of glider_enable==1
 
-///////////////////////////////send sonar setup to mbed///////////////
-
 //printf("I'm alive\r\n");
 
-fprintf(logfd,"Start: range=%d; leflim=%d; rightlim=%d;c_heading=%f\r\n",range,leftlim,rightlim,c_heading);
+fprintf(logfd,"Start: range=%d; leflim=%d; rightlim=%d;c_heading=%f;P_gain=%f\r\n",range,leftlim,rightlim,c_heading,P_gain);
 fprintf(logfd,"m_roll;m_pitchf;m_headingf;north;east;m_depthf;range_filtered;current_angle;c_heading\r\n");
 fclose(logfd);
+///////////////End of the initialization//////////////////////////
+
+/////////////////////////////////////////////////////////////
 //////////////////////Start the looping//////////////////////
+/////////////////////////////////////////////////////////////
 while(1)
 {
-	//logfd=fopen("/media/UNTITLED/tritech_log.txt","a");
 	logfd=fopen("tritech_log.txt","a");
-////////////////////////////////////////////////////////
 ///////////get vehicle information from the glider/////
-///////////////////////////////////////////////////////
 	while(!(glider_header==0x55))
 	{
 	while(!(read(fd_glider,&glider_header,1)>0))
@@ -539,10 +517,10 @@ while(1)
 	m_pitch=(a_pitch[0]*256)+a_pitch[1];  //in centi-degree
 	m_roll=(a_roll[0]*256)+a_roll[1];     //in centi-degree
 	m_heading=(a_heading[0]*256)+a_heading[1];  //in centi-degree
-///switch m_y -> east    m_x ->north	
+	///switch m_y -> east    m_x ->north	
 	m_y=((a_x[0]<<24)&0xFF000000)|((a_x[1]<<16)&0x00FF0000)|((a_x[2]<<8)&0x0000FF00)|(a_x[3]&0x000000FF);  //in cm
 	m_x=((a_y[0]<<24)&0xFF000000)|((a_y[1]<<16)&0x00FF0000)|((a_y[2]<<8)&0x0000FF00)|(a_y[3]&0x000000FF); //in cm
-
+	//Convert the units
 	m_xf=m_x/10.0;
 	m_yf=m_y/10.0;
 	m_depthf=m_depth/10.0;
@@ -550,9 +528,7 @@ while(1)
 	m_rollf=m_roll/100.00;
 	m_pitchf=m_pitch/100.00;
 
-/////////////////////////////////////////////////
 /////////////////get sonar sample///////////////
-////////////////////////////////////////////////
 	if(simulator_mode==0)
 	{
 		sonar_data[0]=0;
@@ -599,25 +575,24 @@ while(1)
 		sonar_bin[count-44]=sonar_data[count];
 		}
 		fprintf(logfd,"\r\n");
-//get range		
-	range_filtered=range_extract(sonar_bin, result_data,binbytes-1, 10, range, 20, 0);///minimum range to be 10 meters
+	//get range		
+	range_filtered=range_extract(sonar_bin, result_data,binbytes-1, 10, range, 20, 0);///minimum range to be 10 meters;  20 is the window size
 	//printf("current_angle=%f;range_filtered=%f\r\n",current_angle,range_filtered);
 
 	}
 
 	//printf("range_filtered=%d;%d;%d;%d;current_angle=%d;%d;%d;%d;\r\n",mbed_data[0],mbed_data[1],mbed_data[2],mbed_data[3],mbed_data[5],mbed_data[6],mbed_data[7],mbed_data[8]);
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////Calculate the c_heading?/////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////
-//if(m_depthf>20)
-//{
+
+/////////////////////////////Calculate the c_heading/////////////////////////////
+	//Convert the Range to vehicle coordinate//
 	R_to_vehicle(range_filtered, current_angle, beta,Pv);
 	//convert to earth
 	vehicle_to_earth(m_roll,m_pitch,m_heading,m_x,m_y,m_depth,Pv,Pe);
 
 	//update valid measurement update the temp array
-	if(m_depthf>active_depth)//&current_angle<280&current_angle>240)
+	if(m_depthf>active_depth)//active only when under the active depth
 	{
+		//Update the temp array when the sonar is scanning inside the active sector
 		if(current_angle<active_R&current_angle>active_L)
 		{
 			center_flag++;
@@ -627,10 +602,10 @@ while(1)
 			ff=0;
 			d_yaw=m_headingf-yaw0;
 			yaw0=m_headingf;
-			d_range=Pv[1]-range_vy0;
-			range_vy0=Pv[1];
-			//d_range=range_filtered-range_filtered0;
-			//range_filtered0=range_filtered;
+			//d_range=Pv[1]-range_vy0;
+			//range_vy0=Pv[1];
+			d_range=range_filtered-range_filtered0;
+			range_filtered0=range_filtered;
 			ambiguity_flag=d_range*d_yaw;
 			}
 			down_flag=0;
@@ -660,15 +635,15 @@ while(1)
 		down_flag=1;
 		}
 		///calculate the d_heading
-		if((down_flag==1|up_flag==1)&center_flag>0)
+		if((down_flag==1|up_flag==1)&center_flag>0)// calculate the d_heading when the sonar finished the active secotr scanning.
 		{
 
 			sum_vy=0;
 			for(count=0;count<ff;count++)
 			{
-			sum_vx=sum_vx+temp_ix[count];
+			//sum_vx=sum_vx+temp_ix[count];
 			sum_vy=sum_vy+temp_iy[count];
-			sum_vz=sum_vz+temp_iz[count];
+			//sum_vz=sum_vz+temp_iz[count];
 			//printf("%f;",temp_iy[count]);
 			}
 			//int c = getchar();
@@ -680,8 +655,7 @@ while(1)
 			}			
 			else
 			{
-			
-			HeadingPID(sum_vy,offset,0.2,d_heading, error_east,error_east0,i_range,i_range0);
+			HeadingPID(sum_vy,offset,0.2,d_heading, error_east,error_east0,i_range,i_range0,P_gain);
 			error_east0=error_east;
 			i_range0=i_range;
 			}
@@ -699,9 +673,9 @@ while(1)
 	{
 	c_heading=c_heading-360;
 	}
-//////////////////////////////////////////////////////////////////////////////////////////
+
 	////////////////////send to glider//////////////////////////
-////////////////////////////////////////////////////////////////////////////
+
 	glider_feed[2]=(int) range_filtered+15;
 	glider_feed[3]=(range_filtered-((int)range_filtered))*100+15;
 	glider_feed[4]=((int)(current_angle/10.00))+15;
@@ -716,7 +690,7 @@ while(1)
 fprintf(logfd,"%.2f;%.2f;%.2f;%.1f;%.1f;%.1f;%.2f;%.1f;%.2f;\r\n",m_rollf,m_pitchf,m_headingf,m_xf,m_yf,m_depthf,range_filtered,current_angle,c_heading);
 
 fclose(logfd);
-}
+}//while(1)
 
 }
 
